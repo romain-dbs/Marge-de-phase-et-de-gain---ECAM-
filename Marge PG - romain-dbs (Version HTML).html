@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Diagrammes de Bode – marges</title>
+<style>
+:root{--bg:#f5f7fa;--fg:#14202e;--mut:#6b7a8c;--grid:#dde3ea;--c1:#1f6fb2;--c2:#c2571a;--cur:#d12f4a;--ok:#1d8a4e;--ko:#c0392b;--card:#fff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1620;--fg:#e6edf5;--mut:#8a99ab;--grid:#26313f;--c1:#5aaaf0;--c2:#f0955a;--cur:#ff6b86;--ok:#4cc789;--ko:#ff7b6b;--card:#17202c}}
+*{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+h1{font-size:20px;margin:0}
+#fn{color:var(--mut);font-size:13px;margin:2px 0 10px}
+#gear{width:44px;height:44px;border-radius:50%;border:1px solid var(--grid);background:var(--card);color:var(--fg);font-size:24px;cursor:pointer;transition:transform .5s}
+#gear:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--c1);outline-offset:2px}
+canvas{display:block;width:100%;background:var(--card);border:1px solid var(--grid);border-radius:8px;touch-action:pan-y;cursor:crosshair}
+#cg{height:240px;margin-bottom:10px}#cp{height:240px}
+#ro{margin:10px 0;padding:8px 12px;background:var(--card);border:1px solid var(--grid);border-radius:8px;font-variant-numeric:tabular-nums;min-height:42px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+label{display:flex;flex-direction:column;font-size:13px;color:var(--mut);gap:2px}
+input{width:130px;padding:8px;border:1px solid var(--grid);border-radius:6px;background:var(--card);color:var(--fg);font-size:16px}
+input[type=range]{width:100%;padding:0;accent-color:var(--c1)}
+#kl{flex:1;min-width:240px;color:var(--fg)}
+button.b{padding:9px 16px;border-radius:6px;border:1px solid var(--c1);background:var(--c1);color:#fff;font-size:15px;cursor:pointer}
+button.s{background:transparent;color:var(--c1)}
+#fb{margin-top:10px;min-height:24px;font-weight:600}
+small{color:var(--mut);display:block;margin-top:8px}
+@media (prefers-reduced-motion:reduce){#gear{transition:none}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>Marges de gain et de phase</h1><div id="fn"></div></div>
+<button id="gear" title="Nouveau diagramme" aria-label="Générer un nouveau diagramme">↻</button></header>
+<canvas id="cg"></canvas>
+<canvas id="cp"></canvas>
+<div id="ro">Survolez un diagramme pour lire les valeurs.</div>
+<div class="row" style="margin-bottom:14px">
+<label id="kl">Gain K : <b id="kv"></b><input id="ks" type="range" step="0.5"></label>
+<label>Aller au gain (dB)<input id="vg" inputmode="decimal" autocomplete="off" placeholder="ex. 0"></label>
+<label>Aller à la phase (°)<input id="vp" inputmode="decimal" autocomplete="off" placeholder="ex. -180"></label>
+</div>
+<div class="row">
+<label>Marge de gain (dB)<input id="ig" inputmode="decimal" autocomplete="off"></label>
+<label>Marge de phase (°)<input id="ip" inputmode="decimal" autocomplete="off"></label>
+<button class="b" id="chk">Vérifier</button>
+<button class="b s" id="rev">Révéler</button>
+</div>
+<div id="fb" role="status"></div>
+<small>Marge de gain = −Gain(dB) là où la phase vaut −180° (modulo 360°). Marge de phase = 180° + Phase là où le gain vaut 0 dB. S’il y a plusieurs croisements, on retient le plus critique. Si le croisement n’existe pas, tapez « inf ». Tolérance : ±1 dB et ±3°.</small>
+</main>
+<script>
+const $=id=>document.getElementById(id),rnd=(a,b)=>a+Math.random()*(b-a),f1=v=>v.toLocaleString("fr-FR",{maximumFractionDigits:2,minimumFractionDigits:2}),D=180/Math.PI;
+const L=52,R=10,TP=8,B=24;
+let S,K,W,M,lx0,lx1,GY,PY,cur=null,shown=false,rot=0;
+const gs=w=>{let g=-20*S.n*Math.log10(w);S.p.forEach(p=>g-=10*Math.log10(1+(w/p)**2));if(S.z)g+=10*Math.log10(1+(w/S.z)**2);if(S.r){const u=w/S.r.wn;g-=10*Math.log10((1-u*u)**2+(2*S.r.k*u)**2)}return g};
+const gdB=w=>gs(w)+20*Math.log10(K);
+const ph=w=>{let a=-90*S.n-w*S.T*D;S.p.forEach(p=>a-=Math.atan(w/p)*D);if(S.z)a+=Math.atan(w/S.z)*D;if(S.r){const u=w/S.r.wn;a-=Math.atan2(2*S.r.k*u,1-u*u)*D}return a};
+function root(f,a,b){for(let i=0;i<50;i++){const m=Math.sqrt(a*b);if(f(a)*f(m)<=0)b=m;else a=m}return Math.sqrt(a*b)}
+function margins(){
+ const g=W.map(gdB),p=W.map(ph),pm=[],gm=[];
+ for(let i=0;i<W.length-1;i++){
+  if(g[i]*g[i+1]<0){const w=root(gdB,W[i],W[i+1]),a=ph(w);let m=((a+180)%360+360)%360;if(m>180)m-=360;pm.push({w,v:m,a})}
+  const k0=Math.floor((p[i]+180)/360),k1=Math.floor((p[i+1]+180)/360);
+  if(k0!==k1){const t=360*Math.max(k0,k1)-180,w=root(x=>ph(x)-t,W[i],W[i+1]);gm.push({w,v:-gdB(w),t})}
+ }
+ const mn=a=>a.length?a.reduce((x,y)=>y.v<x.v?y:x):null;
+ return{pm:mn(pm),gm:mn(gm)};
+}
+function gen(){
+ const t=Math.floor(rnd(0,5)),p1=10**rnd(-.5,.7),p2=p1*10**rnd(.2,.9),p3=p2*10**rnd(.2,.9);
+ S={n:0,p:[p1,p2,p3],z:0,r:null,T:0};let nm="Trois pôles";
+ if(t==1){S.n=1;S.p=[p1,p2];nm="Intégrateur et deux pôles"}
+ else if(t==2){S.p=[p1,p2];S.T=10**rnd(-.8,-.1)/p2;nm="Deux pôles et retard pur"}
+ else if(t==3){S.n=1;S.z=p1*10**rnd(0,.6);nm="Intégrateur, zéro et trois pôles"}
+ else if(t==4){S.p=[p2];S.r={wn:p1,k:rnd(.2,.6)};nm="Second ordre résonant et un pôle"}
+ const cs=[...S.p,S.z,S.r&&S.r.wn,S.T&&1/S.T].filter(Boolean);
+ lx0=Math.log10(Math.min(...cs)/30);lx1=Math.log10(Math.max(...cs)*30);
+ W=Array.from({length:1200},(_,i)=>10**(lx0+(lx1-lx0)*i/1199));
+ K=1;K=10**(-gs(10**rnd(Math.log10(p1),Math.log10(p2*3)))/20);
+ const k0=20*Math.log10(K),gl=W.map(gdB),pl=W.map(ph);
+ let a=Math.floor((Math.min(...gl)-30)/20)*20;const b=Math.ceil((Math.max(...gl)+30)/20)*20;a=Math.max(a,b-220);
+ GY=[a,b,b-a>160?40:20];
+ const c=Math.floor(Math.min(...pl)/45)*45,e=Math.ceil(Math.max(...pl)/45)*45;
+ PY=[c,e,e-c>360?90:45];
+ const ks=$("ks");ks.min=k0-30;ks.max=k0+30;ks.value=k0;
+ shown=false;cur=null;["ig","ip","vg","vp"].forEach(i=>$(i).value="");
+ $("fb").textContent="";$("fb").style.color="";$("ro").textContent="Survolez un diagramme pour lire les valeurs.";
+ $("fn").textContent="Système : "+nm+". Réglez K avec le curseur et lisez les marges.";
+ setK(k0);
+}
+function setK(db){K=10**(db/20);M=margins();shown=false;$("fb").textContent="";$("kv").textContent="K = "+f1(K)+" ("+f1(db)+" dB)";cur?show():draw()}
+function plot(cv,fn,Y0,Y1,st,unit,color,refs,marks){
+ const d=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*d;cv.height=h*d;
+ const g=cv.getContext("2d");g.scale(d,d);const cs=getComputedStyle(document.documentElement),c=n=>cs.getPropertyValue(n).trim();
+ const pw=w-L-R,hh=h-TP-B,X=v=>L+(Math.log10(v)-lx0)/(lx1-lx0)*pw,Y=v=>TP+(Y1-v)/(Y1-Y0)*hh;
+ g.font="11px system-ui";g.fillStyle=c("--mut");g.strokeStyle=c("--grid");g.lineWidth=1;
+ for(let k=Math.ceil(lx0);k<=lx1;k++){const x=X(10**k);g.beginPath();g.moveTo(x,TP);g.lineTo(x,TP+hh);g.stroke();g.textAlign="center";g.fillText("10"+(k<0?"⁻":"")+String(Math.abs(k)).replace(/\d/g,q=>"⁰¹²³⁴⁵⁶⁷⁸⁹"[q]),x,h-8)}
+ g.textAlign="right";for(let v=Y0;v<=Y1;v+=st){const y=Y(v);g.beginPath();g.moveTo(L,y);g.lineTo(L+pw,y);g.stroke();g.fillText(v+unit,L-5,y+4)}
+ g.fillStyle=c("--mut");g.textAlign="left";g.fillText("ω (rad/s)",L+pw-56,TP+hh-5);
+ g.save();g.beginPath();g.rect(L,TP,pw,hh);g.clip();
+ g.strokeStyle=c("--fg");g.lineWidth=1.2;refs.forEach(r=>{g.beginPath();g.moveTo(L,Y(r));g.lineTo(L+pw,Y(r));g.stroke()});
+ g.strokeStyle=c(color);g.lineWidth=2.2;g.beginPath();
+ for(let i=0;i<=500;i++){const wv=10**(lx0+(lx1-lx0)*i/500),x=X(wv),y=Y(fn(wv));i?g.lineTo(x,y):g.moveTo(x,y)}g.stroke();
+ if(shown){g.setLineDash([5,4]);g.lineWidth=1.5;g.strokeStyle=c("--ok");g.fillStyle=c("--ok");marks(g,X,Y);g.setLineDash([])}
+ if(cur){const x=X(cur);g.strokeStyle=c("--cur");g.lineWidth=1;g.beginPath();g.moveTo(x,TP);g.lineTo(x,TP+hh);g.stroke();
+  g.fillStyle=c("--cur");g.beginPath();g.arc(x,Y(fn(cur)),4,0,7);g.fill()}
+ g.restore();
+}
+function draw(){
+ const seg=(g,x,a,b)=>{g.beginPath();g.moveTo(x,a);g.lineTo(x,b);g.stroke()};
+ plot($("cg"),gdB,GY[0],GY[1],GY[2]," dB","--c1",[0],(g,X,Y)=>{
+  if(M.pm){g.textAlign="left";g.fillText("ωc",X(M.pm.w)+4,Y(0)-4)}
+  if(M.gm){const w=M.gm.w;seg(g,X(w),Y(0),Y(gdB(w)));g.textAlign="left";g.fillText("MG = "+f1(M.gm.v)+" dB",X(w)+5,Y(gdB(w)/2))}});
+ const refs=[];for(let r=-180+360*Math.ceil((PY[0]+180)/360);r<=PY[1];r+=360)refs.push(r);
+ plot($("cp"),ph,PY[0],PY[1],PY[2],"°","--c2",refs,(g,X,Y)=>{
+  if(M.pm){const a=M.pm.a;seg(g,X(M.pm.w),Y(a-M.pm.v),Y(a));g.textAlign="left";g.fillText("MP = "+f1(M.pm.v)+"°",X(M.pm.w)+5,Y(a-M.pm.v/2))}
+  if(M.gm){g.textAlign="left";g.fillText("ω₁₈₀",X(M.gm.w)+4,Y(M.gm.t)-5)}});
+}
+function show(){$("ro").textContent="ω = "+f1(cur)+" rad/s   |   Gain = "+f1(gdB(cur))+" dB   |   Phase = "+f1(ph(cur))+"°";$("vg").value=gdB(cur).toFixed(2);$("vp").value=ph(cur).toFixed(2);draw()}
+function aller(t,id){const v=parseFloat($(id).value.replace(",","."));if(isNaN(v))return;const f=t==="g"?gdB:ph,lo=W[0],hi=W[W.length-1];
+ if((f(lo)-v)*(f(hi)-v)>0){$("ro").textContent="Valeur hors du diagramme (de "+f1(Math.min(f(lo),f(hi)))+" à "+f1(Math.max(f(lo),f(hi)))+").";return}
+ cur=root(w=>f(w)-v,lo,hi);show()}
+function mv(e){const r=e.currentTarget.getBoundingClientRect(),x=e.clientX-r.left,pw=r.width-L-R;
+ if(x<L||x>L+pw)return;cur=10**(lx0+(x-L)/pw*(lx1-lx0));show()}
+["cg","cp"].forEach(i=>$(i).addEventListener("pointermove",mv));
+$("ks").addEventListener("input",e=>setK(+e.target.value));
+$("gear").onclick=()=>{rot+=180;$("gear").style.transform="rotate("+rot+"deg)";gen()};
+const txt=(m,u)=>m?f1(m.v)+u:"∞ (aucun croisement)";
+$("rev").onclick=()=>{shown=!shown;draw();if(shown){$("fb").style.color="";$("fb").textContent="Réponse : MG = "+txt(M.gm," dB")+" ; MP = "+txt(M.pm,"°")+"."}};
+const q=s=>{s=s.trim().replace(",",".");return /^[+]?(inf|∞|i|a)/i.test(s)?Infinity:parseFloat(s)};
+function chk(){
+ const a=q($("ig").value),b=q($("ip").value),fb=$("fb");
+ if(isNaN(a)||isNaN(b)){fb.style.color="var(--ko)";fb.textContent="Saisissez les deux marges (nombre ou « inf »).";return}
+ const ok=(x,m,t)=>m?isFinite(x)&&Math.abs(x-m.v)<=t:x===Infinity,og=ok(a,M.gm,1),op=ok(b,M.pm,3);
+ fb.style.color=og&&op?"var(--ok)":"var(--ko)";
+ fb.textContent=og&&op?"Bravo, les deux marges sont justes.":(og?"Marge de gain juste, marge de phase incorrecte.":op?"Marge de phase juste, marge de gain incorrecte.":"Les deux marges sont incorrectes, regardez encore.");
+}
+$("chk").onclick=chk;["ig","ip"].forEach(i=>$(i).addEventListener("keydown",e=>{if(e.key==="Enter")chk()}));
+$("vg").addEventListener("input",()=>aller("g","vg"));$("vp").addEventListener("input",()=>aller("p","vp"));
+addEventListener("resize",draw);
+gen();
+</script>
+</body>
+</html>
